@@ -1,7 +1,7 @@
 use futures::future::try_join_all;
 
 use ethers::{
-    providers::{Middleware},
+    providers::Middleware,
     types::BigEndianHash,
     utils::hex::{FromHex, ToHexExt},
 };
@@ -11,7 +11,7 @@ use ethers::types as etrs;
 use eyre::{Context, ContextCompat};
 use revm::{
     db::{CacheDB, DatabaseRef},
-    primitives::{AccountInfo, HandlerCfg},
+    primitives::AccountInfo,
     Database,
 };
 use revm::{

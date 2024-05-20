@@ -1,12 +1,12 @@
 use ethers::providers::{Http, Middleware};
 use eyre::{Context, ContextCompat, Ok};
 use futures::AsyncWriteExt;
-use slot0_simulator::config::{load_config_from_env, Config};
+use slot0_simulator::config::load_config_from_env;
 use slot0_simulator::simulate_routes;
 use tokio::task::JoinHandle;
 
+use std::env;
 use std::sync::Arc;
-use std::{env, fs};
 
 use slot0_simulator::{LOGGER_TARGET_API, LOGGER_TARGET_MAIN, LOGGER_TARGET_SYNC};
 

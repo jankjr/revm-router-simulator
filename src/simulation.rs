@@ -240,7 +240,6 @@ pub async fn simulate_call_many(
             sim_fork = sim_fork
                 .modify()
                 .modify_tx_env(|env| {
-                    
                     env.caller = Address::from(tx.from.0);
                     env.data = tx.data.unwrap_or_default().0.into();
                     env.value = revm::primitives::U256::from_limbs(
