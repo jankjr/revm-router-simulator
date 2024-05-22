@@ -16,16 +16,16 @@ use warp::Filter;
 async fn save_watched(watched: Vec<(String, Vec<String>)>, cache_file: String) -> eyre::Result<()> {
     let mut file = async_fs::OpenOptions::new()
         .write(true)
-        .create(true)
         .open(cache_file.clone())
         .await?;
 
     let blob = serde_json::to_string_pretty(&watched)
         .wrap_err("Failed to serialize watched addresses and storage to JSON")?;
-    file.write(blob.as_bytes())
+    file.write_all(blob.as_bytes())
         .await
         .wrap_err("Failed to write watched addresses and storage to cache file")?;
-
+    file.flush().await?;
+    file.close().await?;
     return Ok(());
 }
 fn load_watched_cache(cache_file: &String) -> eyre::Result<Vec<(String, Vec<String>)>> {
@@ -75,41 +75,31 @@ async fn on_block(
         .number
         .wrap_err("Failed to read block from block update")?
         .as_u64();
-    log::debug!(target: LOGGER_TARGET_SYNC, "Got block {:?}", latest_block);
+
     let mut current_syncced_block = {
         let reader = app_state.cannonical.read().await;
-        let out = reader.get_current_block().wrap_err("No block?")?;
+        let out = reader
+            .get_current_block()
+            .wrap_err("Fork block has no block number?")?;
         out
     };
 
-    if current_syncced_block >= latest_block {
-        log::debug!(target: LOGGER_TARGET_SYNC, "We're up to date, current block: {current_syncced_block}, latest block: {latest_block}");
+    let delta = latest_block - current_syncced_block;
+
+    if delta == 0 {
         return Ok(());
     }
 
-    let delta = latest_block - current_syncced_block;
-
-    if delta == 1 {
-        log::debug!(target: LOGGER_TARGET_SYNC, "We're at block {}, latest cannonical block {}", current_syncced_block, latest_block);
-        app_state
-            .cannonical
-            .write()
-            .await
-            .apply_next_block(block)
-            .await?;
-    } else if delta > 1 {
-        log::info!(target: LOGGER_TARGET_SYNC, "We're {} blocks behind cannonical {}", delta, latest_block);
-
-        while current_syncced_block <= latest_block {
+    if delta > 1 {
+        log::info!(target: LOGGER_TARGET_SYNC, "We are behind by {delta} blocks, catching up first");
+        while current_syncced_block < latest_block - 1 {
             let block_number: u64 = current_syncced_block + 1;
-            log::debug!(target: LOGGER_TARGET_SYNC, "Fetching block {:?}", block_number);
+            log::info!(target: LOGGER_TARGET_SYNC, "Fetching {block_number}");
             let block = provider
                 .get_block(block_number)
                 .await?
-                .wrap_err(format!("Failed to fetch block {block_number} from RPC"))
                 .wrap_err(format!("Failed to fetch block {block_number} from RPC"))?;
 
-            log::debug!(target: LOGGER_TARGET_SYNC, "Applying block {:?}", block_number);
             app_state
                 .cannonical
                 .write()
@@ -120,10 +110,13 @@ async fn on_block(
         }
     }
 
-    if current_syncced_block % 24 == 0 {
-        log::info!(target: LOGGER_TARGET_MAIN, "Cannonical block: {current_syncced_block}");
-    }
-    Ok(())
+    log::debug!(target: LOGGER_TARGET_SYNC, "Applying latest block {latest_block}");
+    return app_state
+        .cannonical
+        .write()
+        .await
+        .apply_next_block(block)
+        .await;
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
@@ -210,10 +203,15 @@ async fn main() -> eyre::Result<(), eyre::Report> {
         }
 
         let mut total_watched = { app_state.cannonical.read().await.get_total_watched().await };
+        let max_watched_accs = config.max_watched_accounts;
+        let max_watched_storage_slots = config.max_watched_storage_slots;
         loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
             let reader = app_state.cannonical.read().await;
             let total_watched_current = reader.get_total_watched().await;
+
+            log::info!(target: LOGGER_TARGET_SYNC, "Current watched accounts: {}/{} slots: {}/{}", total_watched_current.0, max_watched_accs, total_watched_current.1, max_watched_storage_slots);
+
             let diff = (
                 total_watched_current.0 - total_watched.0,
                 total_watched_current.1 - total_watched.1,
@@ -221,7 +219,7 @@ async fn main() -> eyre::Result<(), eyre::Report> {
             if diff.0 + diff.1 == 0 {
                 continue;
             }
-
+            log::info!(target: LOGGER_TARGET_SYNC, "Saving latest watched accounts");
             let data_to_save = reader.export_watched().await;
             match save_watched(data_to_save, cache_file.clone()).await {
                 eyre::Result::Ok(()) => {
@@ -235,6 +233,21 @@ async fn main() -> eyre::Result<(), eyre::Report> {
         }
     });
 
+    let app_state = base_app_state.clone();
+    let api_config = config.clone();
+    let delete_old = tokio::spawn(async move {
+        if !api_config.cache_watched {
+            log::info!(target: LOGGER_TARGET_SYNC, "Watched cache disabled, not starting save loop");
+            return Ok(());
+        }
+
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+            let mut writer = app_state.cannonical.write().await;
+            writer.collect_old().await;
+        }
+    });
+
     // This task will receive updates from the handle-sync-loop task whenever there are any changes to the watched set
     // It does this with a channl that just needs to contain a single pendin item that should eventually be consumed by the
     // task
@@ -243,7 +256,6 @@ async fn main() -> eyre::Result<(), eyre::Report> {
     let app_state = base_app_state.clone();
 
     let provider = provider.clone();
-    let api_config = config.clone();
     let handle_sync_loop: JoinHandle<eyre::Result<()>> = tokio::spawn(async move {
         log::debug!(target: LOGGER_TARGET_SYNC, "Starting sync loop");
         let ws_provider = Provider::connect(fork_url_ws.clone())
@@ -258,7 +270,6 @@ async fn main() -> eyre::Result<(), eyre::Report> {
             .wrap_err("Failed to subscribe to block stream")?;
 
         log::debug!(target: LOGGER_TARGET_SYNC, "Stream initialized. Loading current state");
-        let mut total_watched = { app_state.cannonical.read().await.get_total_watched().await };
         while let Some(block) = stream.next().await {
             let provider = provider.clone();
             let result = on_block(provider.clone(), app_state.clone(), block).await;
@@ -277,7 +288,8 @@ async fn main() -> eyre::Result<(), eyre::Report> {
     let out = tokio::join!(
         handle_sync_loop,
         handle_http_server,
-        save_watched_cache_handle
+        save_watched_cache_handle,
+        delete_old
     );
 
     log::debug!(target: LOGGER_TARGET_MAIN, "All tasks shut down {:?}", out);

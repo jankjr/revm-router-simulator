@@ -310,7 +310,7 @@ fn commit_result_into_resp(
                 }
             }
             revm::primitives::ExecutionResult::Halt { reason, gas_used } => match reason {
-                revm::primitives::HaltReason::OutOfGas(gas) => SimulationResponse::Error {
+                revm::primitives::HaltReason::OutOfGas(_) => SimulationResponse::Error {
                     value: "0x".to_string(),
                     gas_used: gas_used.into(),
                     message: "Out out gas".to_string(),

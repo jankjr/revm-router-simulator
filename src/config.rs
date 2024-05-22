@@ -6,6 +6,8 @@ pub struct Config {
     pub cache_watched: bool,
     pub port: u16,
     pub fork_url: String,
+    pub max_watched_storage_slots: usize,
+    pub max_watched_accounts: usize,
     pub ws_fork_url: String,
     pub max_request_size: u64,
 }
@@ -49,12 +51,24 @@ pub fn load_config_from_env() -> Config {
         .parse::<u64>()
         .expect("MAX_REQUEST_SIZE must be a valid u64");
 
+    let max_watched_storage_slots = std::env::var("MAX_WATCHED_STORAGE_SLOTS")
+        .unwrap_or("67108864".to_string())
+        .parse::<usize>()
+        .expect("MAX_WATCHED_STORAGE_SLOTS must be a valid usize");
+    
+    let max_watched_accounts = std::env::var("MAX_WATCHED_STORAGE_SLOTS")
+        .unwrap_or("1048576".to_string())
+        .parse::<usize>()
+        .expect("MAX_WATCHED_STORAGE_SLOTS must be a valid usize");
+
     Config {
         link_type,
         cache_watched,
         fork_url,
         port,
         ws_fork_url,
+        max_watched_storage_slots,
+        max_watched_accounts,
         max_request_size,
     }
 }
