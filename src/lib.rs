@@ -56,7 +56,7 @@ impl ApplicationState {
             erc20_abis: Arc::new(out),
         };
 
-        if watched.len() == 0 {
+        if watched.is_empty() {
             log::info!(target: LOGGER_TARGET_SYNC, "No watched positions provided, skipping loading of watched positions");
             return Ok(out);
         }
@@ -81,7 +81,7 @@ impl ApplicationState {
             .await
             .wrap_err("Failed to load initial watched positions")?;
 
-        return Ok(out);
+        Ok(out)
     }
     pub async fn fork<'a>(&self) -> Evm<'a, (), CacheDB<Forked>> {
         // Forks the current state of the cannonical fork into into a new EVM instance with

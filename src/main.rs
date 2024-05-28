@@ -26,7 +26,7 @@ async fn save_watched(watched: Vec<(String, Vec<String>)>, cache_file: String) -
         .wrap_err("Failed to write watched addresses and storage to cache file")?;
     file.flush().await?;
     file.close().await?;
-    return Ok(());
+    Ok(())
 }
 fn load_watched_cache(cache_file: &String) -> eyre::Result<Vec<(String, Vec<String>)>> {
     let mut watched = Vec::<(String, Vec<String>)>::new();
@@ -78,10 +78,10 @@ async fn on_block(
 
     let mut current_syncced_block = {
         let reader = app_state.cannonical.read().await;
-        let out = reader
+        
+        reader
             .get_current_block()
-            .wrap_err("Fork block has no block number?")?;
-        out
+            .wrap_err("Fork block has no block number?")?
     };
 
     let delta = latest_block - current_syncced_block;
@@ -111,12 +111,12 @@ async fn on_block(
     }
 
     log::debug!(target: LOGGER_TARGET_SYNC, "Applying latest block {latest_block}");
-    return app_state
+    app_state
         .cannonical
         .write()
         .await
         .apply_next_block(block)
-        .await;
+        .await
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
@@ -153,7 +153,7 @@ async fn main() -> eyre::Result<(), eyre::Report> {
     let cache_watched_positions = config.cache_watched;
     let cache_file = format!("./.{}_watched.json", chain_id);
 
-    let watched = if cache_watched_positions == true {
+    let watched = if cache_watched_positions {
         load_watched_cache(&cache_file)?
     } else {
         Vec::new()
@@ -183,7 +183,7 @@ async fn main() -> eyre::Result<(), eyre::Report> {
         let routes = api_base
             .and(simulate_routes(api_config, app_state))
             .recover(handle_rejection)
-            .with(warp::log(&LOGGER_TARGET_API));
+            .with(warp::log(LOGGER_TARGET_API));
 
         log::info!(
             target: LOGGER_TARGET_API,

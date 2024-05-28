@@ -343,7 +343,7 @@ pub async fn simulate_bundle(
 
         log::info!(target: LOGGER_TARGET_SIMULATION, "Simulator started. Fork block {}", sim_fork.block().number);
 
-        let total_gas_in_block = U64::from(sim_fork.block().gas_limit.clone());
+        let total_gas_in_block = U64::from(sim_fork.block().gas_limit);
 
         let total_transactions: u64 = {
             let mut total: usize = 0;
@@ -380,7 +380,7 @@ pub async fn simulate_bundle(
             }
         }
 
-        for approval in request.setup_approvals.unwrap_or(vec![]).iter() {
+        for approval in request.setup_approvals.unwrap_or_default().iter() {
             let encoded = abi
                 .encode(
                     "approve",

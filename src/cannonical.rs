@@ -40,7 +40,7 @@ async fn load_acc_info(
     let (code, code_hash) = match code.is_empty() {
         false => {
             let code = revm::primitives::Bytecode::new_raw(code.0.into());
-            if code.len() == 0 {
+            if code.is_empty() {
                 (None, KECCAK_EMPTY)
             } else {
                 (Some(code.clone()), code.hash_slow())
@@ -48,15 +48,15 @@ async fn load_acc_info(
         }
         true => (None, KECCAK_EMPTY),
     };
-    return Ok((
+    Ok((
         address,
         AccountInfo {
             balance: revm::primitives::U256::from_limbs(balance.0),
             nonce: nonce.as_u64(),
-            code_hash: code_hash,
-            code: code,
+            code_hash,
+            code,
         },
-    ));
+    ))
 }
 
 async fn load_storage_slot(
@@ -317,10 +317,14 @@ impl CannonicalFork {
                     )),
                     _ => None,
                 };
-                match new_code {
-                    Some(code) => info.code = Some(code),
-                    None => (),
-                };
+
+                if let Some(code) = &new_code {
+                    info.code = Some(code.clone());
+                    info.code_hash = code.hash_slow();
+
+                    let code_lock = Arc::new(RwLock::new(code.clone()));
+                    self.contracts.insert(info.code_hash, code_lock.clone());
+                }
 
                 number_of_account_updates += 1;
 
@@ -511,10 +515,13 @@ impl CannonicalFork {
                     ),
                     _ => None,
                 };
-                match new_code {
-                    Some(code) => info.code = Some(code),
-                    None => (),
-                };
+                if let Some(code) = &new_code {
+                    info.code_hash = code.hash_slow();
+                    info.code = Some(code.clone());
+
+                    let code_lock = Arc::new(RwLock::new(code.clone()));
+                    self.contracts.insert(info.code_hash, code_lock.clone());
+                }
 
                 number_of_account_updates += 1;
 
@@ -582,7 +589,7 @@ impl CannonicalFork {
             .iter()
             .flat_map(|(addr, positions)| {
                 positions
-                    .into_iter()
+                    .iter()
                     .map(move |pos| (addr, pos))
                     .collect::<Vec<_>>()
             })
@@ -620,7 +627,7 @@ impl CannonicalFork {
                 let mut pending_account_info = pending_account.write().await;
                 accs.insert(pending_account.clone());
 
-                let (_, info) = load_acc_info(self.provider.clone(), address.clone())
+                let (_, info) = load_acc_info(self.provider.clone(), address)
                     .await
                     .wrap_err_with(|| {
                         format!(
@@ -648,22 +655,19 @@ impl CannonicalFork {
                 self.accounts.insert(address, pending_account.clone());
                 // Now add it to list of vacant accounts
 
-                return Ok(out.1.clone());
+                Ok(out.1.clone())
             }
         }
     }
 
     pub async fn basic(&mut self, address: Address) -> eyre::Result<Option<AccountInfo>> {
-        match self.accounts.get_mut(&address) {
-            Some(acc) => {
-                let acc = acc.read().await;
-                return Ok(Some(acc.clone()));
-            }
-            None => {}
+        if let Some(acc) = self.accounts.get_mut(&address) {
+            let acc = acc.read().await;
+            return Ok(Some(acc.clone()));
         };
         let out = self.fetch_basic_from_remote(address).await?;
         let out = out.read().await;
-        return Ok(Some(out.clone()));
+        Ok(Some(out.clone()))
     }
     pub async fn basic_ref(&self, address: Address) -> eyre::Result<Option<AccountInfo>> {
         Ok(match self.accounts.get(&address) {
@@ -680,10 +684,10 @@ impl CannonicalFork {
     ) -> eyre::Result<revm::primitives::Bytecode> {
         match self.contracts.get(&code_hash) {
             Some(acc) => {
-                return Ok(acc.read().await.clone());
+                Ok(acc.read().await.clone())
             }
             None => {
-                return Ok(revm::primitives::Bytecode::new());
+                Ok(revm::primitives::Bytecode::new())
             }
         }
     }
@@ -695,7 +699,7 @@ impl CannonicalFork {
         let provider = self.provider.clone();
         match self.pending_storage_reads.entry((address, index)) {
             dashmap::mapref::entry::Entry::Occupied(accs) => {
-                return Ok(accs.get().read().await.clone().present_value);
+                Ok(accs.get().read().await.clone().present_value)
             }
             dashmap::mapref::entry::Entry::Vacant(accs) => {
                 let storage_slot = Arc::new(RwLock::new(StorageSlot::default()));
@@ -716,7 +720,7 @@ impl CannonicalFork {
                 self.storage.insert((address, index), storage_slot.clone());
 
                 self.pending_storage_reads.remove(&(address, index));
-                return Ok(storage_slot.clone().read().await.present_value);
+                Ok(storage_slot.clone().read().await.present_value)
             }
         }
     }
@@ -726,14 +730,13 @@ impl CannonicalFork {
         address: Address,
         index: revm::primitives::ruint::Uint<256, 4>,
     ) -> eyre::Result<prims::U256> {
-        match self.storage.get(&(address, index)) {
-            Some(acc) => {
-                return Ok(acc.read().await.present_value);
-            }
-            None => {}
-        };
+        if let Some(acc) = self.storage.get(
+            &(address, index)
+        ) {
+            return Ok(acc.read().await.present_value);
+        }
 
-        return self.fetch_storage(address, index).await;
+        self.fetch_storage(address, index).await
     }
     pub async fn storage_ref(
         &self,
@@ -757,6 +760,6 @@ impl CannonicalFork {
             .wrap_err_with(|| "Failed to fetch block hash")?
             .wrap_err_with(|| format!("Failed to fetch block hash for block {}", num))?;
 
-        return Ok(prims::B256::from(out.hash.wrap_err("Invalid hash?")?.0));
+        Ok(prims::B256::from(out.hash.wrap_err("Invalid hash?")?.0))
     }
 }
