@@ -1,0 +1,37 @@
+[package]
+name = "slot0-simulator"
+version = "0.1.0"
+edition = "2021"
+authors = ["Jan Demidov"]
+license = "MIT"
+description = "A small app designed to allow you to simulate transactions for anything that requires a some token setup. Like balances / approvals."
+
+[dependencies]
+# http
+warp = "0.3"
+tokio = { version = "1.40.0", features = ["tracing", "full"] }
+revm = { version = "14.0.2", features = ["memory_limit", "serde"] }
+dashmap = "6.1.0"
+
+# serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# bytes
+bytes = "1.2.1"
+
+# ethereum, evm
+
+ethers = { git = "https://github.com/gakonst/ethers-rs", features = ["abigen", "ws", "rustls"] }
+
+# env, logs, errors
+dotenvy = "0.15"
+log = "0.4"
+pretty_env_logger = "0.4"
+eyre = "0.6"
+chrono = "0.4.38"
+tokio-stream = "0.1.15"
+futures = "0.3.30"
+async-fs = "2.1.2"
+
+

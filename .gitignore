@@ -1,0 +1,11 @@
+/target
+.env
+/.idea
+.*_watched.json
+.42161_watched.json
+.1_watched.json
+.8453_watched.json
+arbitrum.sh
+base.sh
+run.sh
+mainnet.sh
