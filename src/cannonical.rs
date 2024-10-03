@@ -306,6 +306,9 @@ impl CannonicalFork {
         for account_diffs in diffs {
             for (k, v) in account_diffs {
                 let addr = revm::primitives::Address::from(k.0);
+                if !self.accounts.contains_key(&addr) {
+                    continue;
+                }
                 let code_update = v
                     .code
                     .map(|v| revm::primitives::Bytes::from_hex(&v))
@@ -535,6 +538,9 @@ impl CannonicalFork {
         .wrap_err("Failed to fetch basic info for all addresses")?;
 
         for (addr, info) in infos.iter() {
+            if let Some(code) = info.code.clone() {
+                self.contracts.insert(info.code_hash, code);
+            }
             self.accounts.insert(*addr, info.clone());
         }
 
@@ -601,11 +607,14 @@ impl CannonicalFork {
                     })?;
 
                 let info = info.clone();
+                if let Some(code) = info.code.clone() {
+                    self.contracts.insert(info.code_hash, code);
+                }
                 pending_account_info.balance = info.balance;
                 pending_account_info.nonce = info.nonce;
                 pending_account_info.code_hash = info.code_hash;
                 pending_account_info.code = info.code;
-
+                
                 self.accounts.insert(address, pending_account_info.clone());
                 return Ok(pending_account_info.clone());
             }
@@ -622,6 +631,7 @@ impl CannonicalFork {
         &self,
         code_hash: prims::B256,
     ) -> eyre::Result<revm::primitives::Bytecode> {
+        log::debug!(target: LOGGER_TARGET_SYNC, "Fetching code for hash {}", code_hash);
         match self.contracts.get(&code_hash) {
             Some(acc) => Ok(acc.clone()),
             None => Ok(revm::primitives::Bytecode::new()),

@@ -35,7 +35,7 @@ pub struct ApplicationState {
 
 pub struct LogTracer {
     executor: revm::primitives::Address,
-    transfer: revm::primitives::FixedBytes<32>,
+    transfer_topic: revm::primitives::FixedBytes<32>,
     deltas: HashMap<
         revm::primitives::Address,
         HashMap<revm::primitives::Address, revm::primitives::I256>,
@@ -46,7 +46,7 @@ impl LogTracer {
     fn new(executor: revm::primitives::Address) -> Self {
         Self {
             executor,
-            transfer: revm::primitives::FixedBytes::<32>::from_str(
+            transfer_topic: revm::primitives::FixedBytes::<32>::from_str(
                 "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
             ).unwrap(),
             deltas: HashMap::new(),
@@ -89,7 +89,7 @@ impl revm::Inspector<&mut CacheDB<Forked>> for LogTracer {
     ) {
         let topics = log.topics();
 
-        if topics[0] != self.transfer || topics.len() != 3 || log.data.data.len() < 32 {
+        if topics[0] != self.transfer_topic || topics.len() != 3 || log.data.data.len() < 32 {
             return;
         }
 
