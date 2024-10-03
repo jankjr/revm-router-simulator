@@ -340,18 +340,18 @@ impl CannonicalFork {
 
                 for (hpos, value) in storage {
                     let pos = revm::primitives::U256::from_limbs(hpos.into_uint().0);
-                    if !self.storage.contains_key(&addr) {
-                        continue;
-                    }
+                    
                     let value_to_insert = prims::U256::from_limbs(value.into_uint().0);
-                    match self.storage.entry(addr) {
-                        Entry::Occupied(mut a) => {
-                            a.get_mut().insert(pos, value_to_insert);
+                    match self.storage.try_get(&addr) {
+                        TryResult::Present(acc) => {
+                            match acc.try_get(&pos) {
+                                TryResult::Present(v) => {
+                                    acc.insert(pos, value_to_insert);
+                                },
+                                _ => {}
+                            }
                         }
-                        Entry::Vacant(acc_storage) => {
-                            let table = acc_storage.insert(DashMap::new());
-                            table.insert(pos, value_to_insert);
-                        }
+                        _ => {}
                     }
                 }
             }
@@ -448,48 +448,54 @@ impl CannonicalFork {
 
             for (k, v) in account_diffs {
                 let addr = revm::primitives::Address::from(k.0);
-                if self.accounts.contains_key(&addr) {
-                    self.accounts.entry(addr).and_modify(|info| {
-                        let code_update = match v.code {
-                            ethers::types::Diff::Born(value) => {
-                                Some(revm::primitives::Bytecode::new_raw(
-                                    revm::primitives::Bytes(value.0),
-                                ))
-                            }
-                            ethers::types::Diff::Changed(value) => {
-                                Some(revm::primitives::Bytecode::new_raw(
-                                    revm::primitives::Bytes(value.to.0),
-                                ))
-                            }
-                            _ => None,
-                        };
-
-                        info.balance = match v.balance {
-                            ethers::types::Diff::Born(value) => {
-                                revm::primitives::U256::from_limbs(value.0)
-                            }
-                            ethers::types::Diff::Changed(value) => {
-                                revm::primitives::U256::from_limbs(value.to.0)
-                            }
-                            _ => info.balance,
-                        };
-
-                        info.nonce = match v.nonce {
-                            ethers::types::Diff::Born(value) => value.as_u64(),
-                            ethers::types::Diff::Changed(value) => value.to.as_u64(),
-                            _ => info.nonce,
-                        };
-                        if let Some(code) = code_update {
-                            info.code_hash = code.hash_slow();
-                            info.code = Some(code.clone());
-                            self.contracts.insert(info.code_hash, code);
-                        }
-                    });
+                if self.accounts.try_get(&addr).is_absent() {
+                    continue;
                 }
+                let code_update = match v.code {
+                    ethers::types::Diff::Born(value) => {
+                        Some(revm::primitives::Bytecode::new_raw(
+                            revm::primitives::Bytes(value.0),
+                        ))
+                    }
+                    ethers::types::Diff::Changed(value) => {
+                        Some(revm::primitives::Bytecode::new_raw(
+                            revm::primitives::Bytes(value.to.0),
+                        ))
+                    }
+                    _ => None,
+                };
+                let code_update = code_update.map(|code| (code.hash_slow(), code));
+                
+                self.accounts.entry(addr).and_modify(|info| {
+                    info.balance = match v.balance {
+                        ethers::types::Diff::Born(value) => {
+                            revm::primitives::U256::from_limbs(value.0)
+                        }
+                        ethers::types::Diff::Changed(value) => {
+                            revm::primitives::U256::from_limbs(value.to.0)
+                        }
+                        _ => info.balance,
+                    };
+                    info.nonce = match v.nonce {
+                        ethers::types::Diff::Born(value) => value.as_u64(),
+                        ethers::types::Diff::Changed(value) => value.to.as_u64(),
+                        _ => info.nonce,
+                    };
+                    if let Some((hash, code)) = code_update.clone() {
+                        info.code_hash = hash;
+                        info.code = Some(code.clone());
+                    }
+                });
+                if let Some((hash, code)) = code_update {
+                    self.contracts.insert(hash, code);
+                }
+
                 if v.storage.is_empty() {
                     continue;
                 }
-
+                if self.storage.try_get(&addr).is_absent() {
+                    continue;
+                }
                 for (hpos, pos_val) in v.storage {
                     let value_to_insert = match pos_val {
                         ethers::types::Diff::Born(value) => value,
@@ -497,19 +503,17 @@ impl CannonicalFork {
                         _ => continue,
                     };
                     let pos = revm::primitives::U256::from_limbs(hpos.into_uint().0);
-                    if !self.storage.contains_key(&addr) {
-                        continue;
-                    }
                     let value_to_insert = prims::U256::from_limbs(value_to_insert.into_uint().0);
-
-                    match self.storage.entry(addr) {
-                        Entry::Occupied(mut a) => {
-                            a.get_mut().insert(pos, value_to_insert);
+                    match self.storage.try_get(&addr) {
+                        TryResult::Present(acc) => {
+                            match acc.try_get(&pos) {
+                                TryResult::Present(_) => {
+                                    acc.insert(pos, value_to_insert);
+                                },
+                                _ => {}
+                            }
                         }
-                        Entry::Vacant(acc_storage) => {
-                            let table = acc_storage.insert(DashMap::new());
-                            table.insert(pos, value_to_insert);
-                        }
+                        _ => {}
                     }
                 }
             }
