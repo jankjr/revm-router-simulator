@@ -1,15 +1,13 @@
 use std::borrow::BorrowMut;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
-use std::str::FromStr;
 use std::sync::Arc;
 
-use ethers::abi::{Address as EthrsAddress, Hash, Uint};
-
-use ethers::types::{BigEndianHash, Bytes};
-use ethers::utils::hex::ToHexExt;
+use alloy::hex::ToHexExt;
+use alloy::sol;
+use alloy::sol_types::SolCall;
 use revm::db::{CacheDB, DbAccount};
-use revm::primitives::{Address, Bytecode, TransactTo};
+use revm::primitives::{Address, Bytecode, Bytes, FixedBytes, TransactTo, U256};
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 use warp::reply::Json;
@@ -24,11 +22,16 @@ use super::config::Config;
 
 #[derive(Debug, Default, Clone, Copy, Serialize, PartialEq)]
 #[serde(transparent)]
-pub struct PermissiveUint(pub Uint);
+pub struct PermissiveUint(pub U256);
 
-impl From<PermissiveUint> for Uint {
+impl From<PermissiveUint> for U256 {
     fn from(value: PermissiveUint) -> Self {
         value.0
+    }
+}
+impl From<PermissiveUint> for u64 {
+    fn from(value: PermissiveUint) -> Self {
+        value.0.to()
     }
 }
 
@@ -40,9 +43,9 @@ impl<'de> Deserialize<'de> for PermissiveUint {
         // Accept value in hex or decimal formats
         let value = String::deserialize(deserializer)?;
         let parsed = if value.starts_with("0x") {
-            Uint::from_str(&value).map_err(serde::de::Error::custom)?
+            U256::from_str_radix(&value[2..], 16).map_err(serde::de::Error::custom)?
         } else {
-            Uint::from_dec_str(&value).map_err(serde::de::Error::custom)?
+            U256::from_str_radix(&value, 10).map_err(serde::de::Error::custom)?
         };
         Ok(Self(parsed))
     }
@@ -87,7 +90,7 @@ pub struct SimulateBundleRequest {
     pub move_funds: Option<Vec<MoveFunds>>,
 
     pub transactions: Vec<TransactionRequest>,
-    pub state_override: Option<HashMap<EthrsAddress, StateOverride>>,
+    pub state_override: Option<HashMap<Address, StateOverride>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,17 +119,17 @@ pub struct StateOverride {
 #[serde(untagged)]
 pub enum State {
     Full {
-        state: HashMap<Hash, PermissiveUint>,
+        state: HashMap<FixedBytes<32>, PermissiveUint>,
     },
     #[serde(rename_all = "camelCase")]
     Diff {
-        state_diff: HashMap<Hash, PermissiveUint>,
+        state_diff: HashMap<FixedBytes<32>, PermissiveUint>,
     },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StorageOverride {
-    pub slots: HashMap<Hash, Uint>,
+    pub slots: HashMap<FixedBytes<32>, U256>,
     pub diff: bool,
 }
 
@@ -150,8 +153,8 @@ impl From<State> for StorageOverride {
 fn override_account(
     exec: &mut CacheDB<Forked>,
     address: Address,
-    balance: Option<Uint>,
-    nonce: Option<Uint>,
+    balance: Option<U256>,
+    nonce: Option<u64>,
     code: Option<Bytes>,
     storage: Option<StorageOverride>,
 ) -> Result<(), OverrideError> {
@@ -164,10 +167,10 @@ fn override_account(
         Entry::Vacant(e) => e.insert(DbAccount::default()),
     };
     if let Some(balance) = balance {
-        account.info.balance = revm::primitives::U256::from_limbs(balance.0);
+        account.info.balance = balance
     }
     if let Some(nonce) = nonce {
-        account.info.nonce = nonce.as_u64();
+        account.info.nonce = nonce
     }
     if let Some(code) = code {
         account.info.code = Some(Bytecode::new_raw(code.to_vec().into()));
@@ -177,8 +180,8 @@ fn override_account(
             .storage
             .extend(storage.slots.into_iter().map(|(key, value)| {
                 (
-                    revm::primitives::U256::from_limbs(key.into_uint().0),
-                    revm::primitives::U256::from_limbs(value.0),
+                    key.into(),
+                    value
                 )
             }));
     }
@@ -256,13 +259,36 @@ fn commit_result_into_resp(
     out
 }
 
+
+
+sol! {
+    /// Interface of the ERC20 standard as defined in [the EIP].
+    ///
+    /// [the EIP]: https://eips.ethereum.org/EIPS/eip-20
+    #[derive(Debug, PartialEq, Eq)]
+    contract ERC20 {
+        mapping(address account => uint256) public balanceOf;
+ 
+        constructor(string name, string symbol);
+ 
+        event Transfer(address indexed from, address indexed to, uint256 value);
+        event Approval(address indexed owner, address indexed spender, uint256 value);
+ 
+        function totalSupply() external view returns (uint256);
+        function transfer(address to, uint256 amount) external returns (bool);
+        function allowance(address owner, address spender) external view returns (uint256);
+        function approve(address spender, uint256 amount) external returns (bool);
+        function transferFrom(address from, address to, uint256 amount) external returns (bool);
+    }
+ }
+
+
 pub async fn simulate_bundle(
     request: SimulateBundleRequest,
     _: Config,
     app_state: Arc<ApplicationState>,
 ) -> Result<Json, Rejection> {
     let handle: JoinHandle<eyre::Result<Vec<SimulationResponse>>> = tokio::spawn(async move {
-        let abi = app_state.erc20_abis.clone();
         let mut response = Vec::<SimulationResponse>::with_capacity(request.transactions.len());
 
         let cannonical = app_state.cannonical.clone();
@@ -324,9 +350,9 @@ pub async fn simulate_bundle(
                 for (address, state_override) in state_override {
                     override_account(
                         sim_fork.db_mut(),
-                        Address::from(address.0),
+                        address,
                         state_override.balance.map(Into::into),
-                        state_override.nonce.map(Into::into),
+                        state_override.nonce.map(|f|f.into()),
                         state_override.code,
                         state_override.state.map(Into::into),
                     )
@@ -335,24 +361,19 @@ pub async fn simulate_bundle(
             }
 
             for approval in approvals.iter() {
-                let encoded = abi
-                    .encode(
-                        "approve",
-                        (
-                            EthrsAddress::from_slice(approval.spender.0.as_slice()),
-                            ethers::types::U256::from(approval.value),
-                        ),
-                    )
-                    .unwrap();
+                let encoded = ERC20::approveCall::abi_encode(
+                    &ERC20::approveCall { spender: approval.spender, amount: approval.value.into() }
+                );
+
                 sim_fork = sim_fork
                     .modify()
                     .modify_tx_env(|env| {
-                        env.caller = Address::from(approval.owner.0);
-                        env.data = encoded.0.into();
-                        env.value = revm::primitives::U256::from_limbs(Uint::from(0u64).0);
-                        env.gas_limit = 100000u64;
-                        env.gas_price = revm::primitives::U256::from(1);
-                        env.transact_to = TransactTo::Call(Address::from(approval.token.0));
+                        env.caller = approval.owner;
+                        env.data = encoded.into();
+                        env.value = U256::from(0u64);
+                        env.gas_limit = 250000u64;
+                        env.gas_price = U256::from(1);
+                        env.transact_to = TransactTo::Call(approval.token);
                     })
                     .build();
 
@@ -361,25 +382,18 @@ pub async fn simulate_bundle(
             }
 
             for movement in movements {
-                let encoded = abi
-                    .encode(
-                        "transfer",
-                        (
-                            EthrsAddress::from_slice(movement.spender.0.as_slice()),
-                            ethers::types::U256::from(movement.quantity),
-                        ),
-                    )
-                    .unwrap();
-
+                let encoded = ERC20::transferCall::abi_encode(
+                    &ERC20::transferCall { to: movement.spender, amount: movement.quantity.into() }
+                );
                 sim_fork = sim_fork
                     .modify()
                     .modify_tx_env(|env| {
-                        env.caller = Address::from(movement.owner.0);
-                        env.data = encoded.0.into();
+                        env.caller = movement.owner;
+                        env.data = encoded.into();
                         env.value = revm::primitives::U256::from(0u64);
-                        env.gas_limit = 30000000u64;
+                        env.gas_limit = 500000u64;
                         env.gas_price = revm::primitives::U256::from(1);
-                        env.transact_to = TransactTo::Call(Address::from(movement.token.0));
+                        env.transact_to = TransactTo::Call(movement.token);
                     })
                     .build();
 
@@ -403,13 +417,11 @@ pub async fn simulate_bundle(
             sim_fork = sim_fork
                 .modify()
                 .modify_tx_env(|env| {
-                    env.caller = Address::from(tx.from.0);
-                    env.data = tx.data.unwrap_or_default().0.into();
-                    env.value = revm::primitives::U256::from_limbs(
-                        Uint::from(tx.value.unwrap_or_default().0).0,
-                    );
-                    env.gas_limit = 25000000u64;
-                    env.gas_price = revm::primitives::U256::from(1000000000u64);
+                    env.caller = tx.from;
+                    env.data = tx.data.unwrap_or_default();
+                    env.value = tx.value.unwrap_or_default().into();
+                    env.gas_limit = block_env.gas_limit.to();
+                    env.gas_price = revm::primitives::U256::from(1u64);
                     env.transact_to = TransactTo::Call(Address::from(tx.to.0));
                 })
                 .build();
@@ -448,12 +460,12 @@ pub struct Log {
 #[serde(rename_all = "camelCase")]
 pub enum SimulationResponse {
     Error {
-        gas_used: Uint,
+        gas_used: u64,
         value: String,
         message: String,
     },
     Success {
-        gas_used: Uint,
+        gas_used: u64,
         value: String,
         logs: Vec<Log>,
     },

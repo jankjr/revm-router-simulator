@@ -1,7 +1,7 @@
-use ethers::abi::Hash;
-use ethers::types::{self as etrs};
-use eyre::{Context, ContextCompat};
-use futures::executor;
+use alloy::pubsub::PubSubFrontend;
+use alloy::rpc::types::Block;
+use alloy::transports::http::{Client, Http};
+use eyre::Context;
 use revm::db::CacheDB;
 use revm::interpreter::{CallInputs, CallOutcome};
 use revm::primitives::{Address, HashMap};
@@ -29,10 +29,9 @@ pub const LOGGER_TARGET_SIMULATION: &str = "slot0::sim";
 
 pub struct ApplicationState {
     pub cannonical: Arc<CannonicalFork>,
-    pub erc20_abis: Arc<ethers::contract::BaseContract>,
     pub config: Config,
 }
-
+ 
 pub struct LogTracer {
     executor: revm::primitives::Address,
     transfer_topic: revm::primitives::FixedBytes<32>,
@@ -103,20 +102,12 @@ impl revm::Inspector<&mut CacheDB<Forked>> for LogTracer {
 impl ApplicationState {
     pub async fn create(
         config: Config,
-        provider: ethers::providers::Provider<ethers::providers::Ws>,
-        provider_trace: ethers::providers::Provider<ethers::providers::Http>,
-        fork_block: etrs::Block<etrs::H256>,
+        provider: alloy::providers::RootProvider<PubSubFrontend>,
+        provider_trace: alloy::providers::RootProvider<Http<Client>>,
+        fork_block: Block,
         watched: Vec<(String, Vec<String>)>,
     ) -> eyre::Result<Self> {
-        let out = ethers::contract::BaseContract::from(
-            ethers::abi::parse_abi(&[
-                "function approve(address spender, uint256 amount) external",
-                "function transfer(address to, uint256 amount) external",
-                "event Transfer(address indexed from, address indexed to, uint256 value)",
-            ])
-            .wrap_err("Failed to parse ERC20 abi")?,
-        );
-
+        
         let out = Self {
             cannonical: Arc::new(CannonicalFork::new(
                 provider,
@@ -124,7 +115,6 @@ impl ApplicationState {
                 fork_block,
                 config.clone(),
             )),
-            erc20_abis: Arc::new(out),
             config: config.clone(),
         };
 
