@@ -1,6 +1,5 @@
-use alloy::pubsub::PubSubFrontend;
 use alloy::rpc::types::Block;
-use alloy::transports::http::{Client, Http};
+use alloy::transports::BoxTransport;
 use eyre::Context;
 use revm::db::CacheDB;
 use revm::interpreter::{CallInputs, CallOutcome};
@@ -31,7 +30,7 @@ pub struct ApplicationState {
     pub cannonical: Arc<CannonicalFork>,
     pub config: Config,
 }
- 
+
 pub struct LogTracer {
     executor: revm::primitives::Address,
     transfer_topic: revm::primitives::FixedBytes<32>,
@@ -47,7 +46,8 @@ impl LogTracer {
             executor,
             transfer_topic: revm::primitives::FixedBytes::<32>::from_str(
                 "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
-            ).unwrap(),
+            )
+            .unwrap(),
             deltas: HashMap::new(),
             calls: Vec::new(),
         }
@@ -62,7 +62,9 @@ impl LogTracer {
             self.deltas.insert(owner, HashMap::new());
         }
         let balances = self.deltas.get_mut(&owner).unwrap();
-        let previous = balances.get(&token).unwrap_or(&revm::primitives::I256::ZERO);
+        let previous = balances
+            .get(&token)
+            .unwrap_or(&revm::primitives::I256::ZERO);
         balances.insert(token, previous.wrapping_add(delta));
     }
 }
@@ -75,11 +77,12 @@ impl revm::Inspector<&mut CacheDB<Forked>> for LogTracer {
     ) -> Option<CallOutcome> {
         if !self.executor.is_zero() && inputs.target_address == self.executor {
             log::trace!(target: LOGGER_TARGET_SIMULATION, "CALL to={}, data={}", inputs.target_address, inputs.input.to_string());
-            self.calls.push((inputs.target_address, inputs.input.clone()));
+            self.calls
+                .push((inputs.target_address, inputs.input.clone()));
         }
         None
     }
-        
+
     fn log(
         &mut self,
         _: &mut revm::interpreter::Interpreter,
@@ -94,7 +97,8 @@ impl revm::Inspector<&mut CacheDB<Forked>> for LogTracer {
 
         let from = revm::primitives::Address::from_word(topics[1]);
         let to = revm::primitives::Address::from_word(topics[2]);
-        let value = revm::primitives::I256::try_from_be_slice(&log.data.data.0[0..32]).unwrap_or_default();
+        let value =
+            revm::primitives::I256::try_from_be_slice(&log.data.data.0[0..32]).unwrap_or_default();
         self.add_delta(log.address, from, -value);
         self.add_delta(log.address, to, value);
     }
@@ -102,19 +106,12 @@ impl revm::Inspector<&mut CacheDB<Forked>> for LogTracer {
 impl ApplicationState {
     pub async fn create(
         config: Config,
-        provider: alloy::providers::RootProvider<PubSubFrontend>,
-        provider_trace: alloy::providers::RootProvider<Http<Client>>,
+        provider: alloy::providers::RootProvider<BoxTransport>,
         fork_block: Block,
         watched: Vec<(String, Vec<String>)>,
     ) -> eyre::Result<Self> {
-        
         let out = Self {
-            cannonical: Arc::new(CannonicalFork::new(
-                provider,
-                provider_trace,
-                fork_block,
-                config.clone(),
-            )),
+            cannonical: Arc::new(CannonicalFork::new(provider, fork_block, config.clone())),
             config: config.clone(),
         };
 

@@ -1,7 +1,7 @@
 use alloy::eips::BlockId;
 use alloy::rpc::types::Block;
-use alloy::transports::http::{Client, Http};
 
+use alloy::transports::BoxTransport;
 use alloy_provider::Provider;
 use eyre::{Context, ContextCompat, Ok};
 use slot0_simulator::config::load_config_from_env;
@@ -17,7 +17,7 @@ use slot0_simulator::{errors::handle_rejection, ApplicationState};
 use warp::Filter;
 
 async fn on_block(
-    provider: alloy::providers::RootProvider<Http<Client>>,
+    provider: alloy::providers::RootProvider<BoxTransport>,
     app_state: Arc<ApplicationState>,
     block: Block,
 ) -> eyre::Result<()> {
@@ -72,16 +72,18 @@ async fn main() -> eyre::Result<(), eyre::Report> {
 
     let config = load_config_from_env();
 
-    let provider_ws = alloy::providers::ProviderBuilder::new()
-        .on_ws(alloy::providers::WsConnect::new(
-            config.ws_fork_url.as_str(),
-        ))
-        .await?;
+    let provider = if config.fork_url.starts_with("ws") {
+        alloy::providers::ProviderBuilder::new()
+            .on_ws(alloy::providers::WsConnect::new(config.fork_url.as_str()))
+            .await?
+            .boxed()
+    } else {
+        alloy::providers::ProviderBuilder::new()
+            .on_http(config.fork_url.as_str().parse()?)
+            .boxed()
+    };
 
-    let provider =
-        alloy::providers::ProviderBuilder::new().on_http(config.fork_url.as_str().parse()?);
-
-    let fork_block = provider_ws
+    let fork_block = provider
         .get_block(
             BlockId::Number(alloy::eips::BlockNumberOrTag::Latest),
             alloy::rpc::types::BlockTransactionsKind::Hashes
@@ -90,15 +92,9 @@ async fn main() -> eyre::Result<(), eyre::Report> {
               .expect("RPC returns None for latest block number, something is not with the RPC provider or chain");
 
     let base_app_state: Arc<ApplicationState> = Arc::new(
-        ApplicationState::create(
-            config.clone(),
-            provider_ws.clone(),
-            provider.clone(),
-            fork_block,
-            vec![],
-        )
-        .await
-        .wrap_err("Failed to create application state")?,
+        ApplicationState::create(config.clone(), provider.clone(), fork_block, vec![])
+            .await
+            .wrap_err("Failed to create application state")?,
     );
 
     let api_config = config.clone();
@@ -130,9 +126,9 @@ async fn main() -> eyre::Result<(), eyre::Report> {
     let provider = provider.clone();
     let handle_sync_loop: JoinHandle<eyre::Result<()>> = tokio::spawn(async move {
         log::debug!(target: LOGGER_TARGET_SYNC, "Starting sync loop");
-        let ws_provider = provider_ws.clone();
+        let provider = provider.clone();
 
-        let mut stream = ws_provider
+        let mut stream = provider
             .subscribe_blocks()
             .await
             .wrap_err("Failed to subscribe to block stream")
@@ -140,7 +136,7 @@ async fn main() -> eyre::Result<(), eyre::Report> {
 
         while let Result::Ok(block) = stream.recv().await {
             let provider = provider.clone();
-            let result = on_block(provider.clone(), app_state.clone(), block).await;
+            let result = on_block(provider.clone().boxed(), app_state.clone(), block).await;
 
             match result {
                 eyre::Result::Ok(()) => {}

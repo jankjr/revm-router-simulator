@@ -1,5 +1,7 @@
 use alloy::{
-    eips::BlockId, hex::{FromHex, ToHexExt}, pubsub::PubSubFrontend, rpc::types::{
+    eips::BlockId,
+    hex::{FromHex, ToHexExt},
+    rpc::types::{
         trace::{
             common::TraceResult,
             geth::{
@@ -10,7 +12,8 @@ use alloy::{
             parity::{Delta, TraceResultsWithTransactionHash, TraceType},
         },
         Block,
-    }, sol, transports::http::{Client, Http}
+    },
+    transports::BoxTransport,
 };
 use alloy_provider::{
     ext::{DebugApi, TraceApi},
@@ -27,9 +30,8 @@ use tokio::{runtime::Handle, sync::RwLock};
 
 use crate::{config::LinkType, LOGGER_TARGET_SYNC};
 
-
 async fn load_acc_info(
-    provider: alloy::providers::RootProvider<PubSubFrontend>,
+    provider: alloy::providers::RootProvider<BoxTransport>,
     address: Address,
 ) -> eyre::Result<(Address, AccountInfo)> {
     log::trace!(target: LOGGER_TARGET_SYNC, "Fetching account {}", address);
@@ -68,7 +70,7 @@ async fn load_acc_info(
 }
 
 async fn load_storage_slot(
-    provider: alloy::providers::RootProvider<PubSubFrontend>,
+    provider: alloy::providers::RootProvider<BoxTransport>,
     address: Address,
     index: prims::U256,
 ) -> eyre::Result<(Address, prims::U256, prims::U256)> {
@@ -211,14 +213,12 @@ pub struct CannonicalFork {
     pending_basic_reads: DashMap<Address, revm::primitives::AccountInfo>,
 
     current_block: Arc<RwLock<Block>>,
-    provider: alloy::providers::RootProvider<PubSubFrontend>,
-    provider_trace: alloy::providers::RootProvider<Http<Client>>,
+    provider: alloy::providers::RootProvider<BoxTransport>,
 }
 
 impl CannonicalFork {
     pub fn new(
-        provider: alloy::providers::RootProvider<PubSubFrontend>,
-        provider_trace: alloy::providers::RootProvider<Http<Client>>,
+        provider: alloy::providers::RootProvider<BoxTransport>,
         fork_block: Block,
         config: crate::config::Config,
     ) -> Self {
@@ -232,7 +232,6 @@ impl CannonicalFork {
             block_hashes: DashMap::with_capacity(1024 * 8),
             current_block: Arc::new(RwLock::new(fork_block)),
             provider,
-            provider_trace,
         }
     }
 
@@ -313,7 +312,7 @@ impl CannonicalFork {
 
     async fn load_reth_trace_and_apply(&self, block_number: u64) -> eyre::Result<()> {
         let trace = self
-            .provider_trace
+            .provider
             .trace_replay_block_transactions(block_number.into(), &[TraceType::StateDiff])
             .await
             .wrap_err(format!("Failed to fetch trace for {}", block_number))?;
@@ -328,7 +327,7 @@ impl CannonicalFork {
         };
 
         let storage_changes = self
-            .provider_trace
+            .provider
             .debug_trace_block_by_number(
                 alloy::eips::BlockNumberOrTag::Number(block_number),
                 GethDebugTracingOptions {
