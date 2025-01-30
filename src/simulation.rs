@@ -335,6 +335,7 @@ pub async fn simulate_bundle(
                 .modify_cfg_env(|f| {
                     f.memory_limit = 1024 * 1024 * 64;
                     f.disable_eip3607 = true;
+                    f.disable_balance_check = true;
                 })
                 .with_db(db)
                 .with_spec_id(revm::primitives::SpecId::CANCUN)
@@ -405,6 +406,7 @@ pub async fn simulate_bundle(
             .modify_cfg_env(|f| {
                 f.disable_eip3607 = true;
                 f.memory_limit = 1024 * 1024 * 64;
+                f.disable_balance_check = true;
             })
             .with_db(&mut db)
             .with_external_context(LogTracer::new(app_state.config.executor))
