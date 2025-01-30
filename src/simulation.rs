@@ -334,6 +334,7 @@ pub async fn simulate_bundle(
                 .with_block_env(block_env.clone())
                 .modify_cfg_env(|f| {
                     f.memory_limit = 1024 * 1024 * 64;
+                    f.disable_eip3607 = true;
                 })
                 .with_db(db)
                 .with_spec_id(revm::primitives::SpecId::CANCUN)

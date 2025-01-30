@@ -10,7 +10,7 @@ description = "A small app designed to allow you to simulate transactions for an
 # http
 warp = "0.3"
 tokio = { version = "1.40.0", features = ["tracing", "full"] }
-revm = { version = "14.0.2", features = ["memory_limit", "serde"] }
+revm = { version = "14.0.2", features = ["serde","dev","std", "c-kzg", "secp256k1", "portable", "blst"] }
 dashmap = "6.1.0"
 
 # serialization
