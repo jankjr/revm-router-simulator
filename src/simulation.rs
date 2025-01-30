@@ -403,6 +403,7 @@ pub async fn simulate_bundle(
         let mut sim_fork = revm::Evm::builder()
             .with_block_env(block_env.clone())
             .modify_cfg_env(|f| {
+                f.disable_eip3607 = true;
                 f.memory_limit = 1024 * 1024 * 64;
             })
             .with_db(&mut db)
